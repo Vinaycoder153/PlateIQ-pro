@@ -160,11 +160,11 @@ export default function LandingPage() {
           </div>
 
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-black leading-tight tracking-tight mb-6">
-            Turn Customer Reviews
+            AI That Improves Your
             <br />
-            into{' '}
+            Menu{' '}
             <span className="bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
-              Smart Menu Decisions
+              Automatically
             </span>
           </h1>
 

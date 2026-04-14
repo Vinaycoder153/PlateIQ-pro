@@ -18,6 +18,9 @@ import {
   X,
   Home,
   DollarSign,
+  Globe,
+  Zap,
+  Target,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
@@ -32,6 +35,33 @@ const NAV_ITEMS = [
   { id: 'recommendations', label: 'Recommendations', icon: Lightbulb },
   { id: 'customizations', label: 'Menu Ideas', icon: DollarSign },
 ];
+
+const MAX_REVIEWS_TO_PROCESS = 200;
+
+/* Parse a single CSV line respecting double-quoted fields */
+function parseCsvLine(line) {
+  const cols = [];
+  let cur = '';
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuote && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuote = !inQuote;
+      }
+    } else if (ch === ',' && !inQuote) {
+      cols.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cols.push(cur);
+  return cols;
+}
 
 const PRIORITY_STYLES = {
   high: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
@@ -69,7 +99,22 @@ export default function Dashboard() {
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (ev) => {
-      setReviewText(ev.target.result.slice(0, 2000));
+      const raw = ev.target.result;
+      // If CSV, extract text column values (last column or join all columns)
+      if (file.name.endsWith('.csv')) {
+        const lines = raw.split('\n').filter((l) => l.trim());
+        // Skip header; take the last column of each row as the review text
+        const reviews = lines
+          .slice(1)
+          .map((line) => {
+            const cols = parseCsvLine(line);
+            return cols[cols.length - 1].trim();
+          })
+          .filter(Boolean);
+        setReviewText(reviews.slice(0, MAX_REVIEWS_TO_PROCESS).join('\n'));
+      } else {
+        setReviewText(raw.slice(0, 5000));
+      }
     };
     reader.readAsText(file);
   };
@@ -214,6 +259,12 @@ export default function Dashboard() {
               <h2 className="text-base font-bold text-gray-900 dark:text-white">
                 Review Upload Panel
               </h2>
+              {analyzed && insights.language && (
+                <span className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">
+                  <Globe className="w-3.5 h-3.5" />
+                  {insights.language.name} · {insights.language.confidence}%
+                </span>
+              )}
             </div>
             <textarea
               value={reviewText}
@@ -261,6 +312,50 @@ export default function Dashboard() {
                 </span>
               )}
             </div>
+
+            {/* Extracted features panel */}
+            {analyzed && insights.extractedFeatures && (
+              <div className="mt-5 pt-5 border-t border-gray-100 dark:border-gray-700">
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-purple-500" />
+                  Extracted Signals
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {Object.entries(insights.extractedFeatures).map(([feature, data]) => {
+                    const total = data.negativeSignals + data.positiveSignals + data.neutralSignals;
+                    const dominant =
+                      data.negativeSignals > data.positiveSignals ? 'negative' : 'positive';
+                    const colorMap = {
+                      negative: 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20',
+                      positive: 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20',
+                    };
+                    const textMap = {
+                      negative: 'text-red-600 dark:text-red-400',
+                      positive: 'text-green-600 dark:text-green-400',
+                    };
+                    return (
+                      <div
+                        key={feature}
+                        className={`rounded-xl border p-3 ${total === 0 ? 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800' : colorMap[dominant]}`}
+                      >
+                        <p className="text-xs font-bold capitalize text-gray-700 dark:text-gray-200 mb-1">
+                          {feature}
+                        </p>
+                        {total === 0 ? (
+                          <p className="text-xs text-gray-400">No signals</p>
+                        ) : (
+                          <p className={`text-xs font-semibold ${textMap[dominant]}`}>
+                            {dominant === 'negative'
+                              ? `⚠ ${data.negativeSignals} complaint${data.negativeSignals !== 1 ? 's' : ''}`
+                              : `✓ ${data.positiveSignals} positive`}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Dynamic section */}
@@ -342,7 +437,7 @@ function OverviewSection({ insights }) {
         </div>
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6">
           <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-4">Complaint Trends</h3>
-          <TrendChart data={insights.trends} />
+          <TrendChart data={insights.trends} anomalies={insights.anomalies || []} />
         </div>
       </div>
 
@@ -421,36 +516,63 @@ function SentimentSection({ insights }) {
 }
 
 function TrendsSection({ insights }) {
+  const anomalies = insights.anomalies || [];
   return (
-    <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6">
-      <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-1">Complaint Trend Analysis</h3>
-      <p className="text-xs text-gray-400 mb-6">Monthly complaint trends for oil, spice, and quantity issues.</p>
-      <TrendChart data={insights.trends} />
+    <div className="space-y-4">
+      {anomalies.length > 0 && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-2xl p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-semibold text-amber-700 dark:text-amber-300 mb-1">
+              {anomalies.length} anomal{anomalies.length === 1 ? 'y' : 'ies'} detected
+            </p>
+            <ul className="space-y-1">
+              {anomalies.map((a, i) => (
+                <li key={i} className="text-xs text-amber-600 dark:text-amber-400">
+                  {a.direction === 'spike' ? '↑' : '↓'} Unusual {a.metric} complaint {a.direction} in{' '}
+                  {a.month} ({a.value} vs avg {a.mean})
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6">
+        <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-1">Complaint Trend Analysis</h3>
+        <p className="text-xs text-gray-400 mb-6">
+          Monthly complaint trends for oil, spice, and quantity issues.{' '}
+          {anomalies.length > 0 && (
+            <span className="text-amber-500">⚠ yellow markers indicate anomalies.</span>
+          )}
+        </p>
+        <TrendChart data={insights.trends} anomalies={anomalies} />
 
-      <div className="mt-6 grid sm:grid-cols-3 gap-4">
-        {[
-          { label: 'Oil Complaints', key: 'oilComplaints', color: 'bg-purple-500' },
-          { label: 'Spice Complaints', key: 'spiceComplaints', color: 'bg-blue-500' },
-          { label: 'Quantity Complaints', key: 'quantityComplaints', color: 'bg-emerald-500' },
-        ].map((item) => {
-          const last = insights.trends[insights.trends.length - 1][item.key];
-          const first = insights.trends[0][item.key];
-          const change = (((last - first) / first) * 100).toFixed(0);
-          return (
-            <div
-              key={item.label}
-              className="p-4 rounded-xl bg-gray-50 dark:bg-gray-800 flex items-start gap-3"
-            >
-              <span className={`w-3 h-3 rounded-full mt-1 shrink-0 ${item.color}`} />
-              <div>
-                <p className="text-sm font-semibold text-gray-900 dark:text-white">{item.label}</p>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Latest: {last} · {change > 0 ? `+${change}%` : `${change}%`} vs start
-                </p>
+        <div className="mt-6 grid sm:grid-cols-3 gap-4">
+          {[
+            { label: 'Oil Complaints', key: 'oilComplaints', color: 'bg-purple-500' },
+            { label: 'Spice Complaints', key: 'spiceComplaints', color: 'bg-blue-500' },
+            { label: 'Quantity Complaints', key: 'quantityComplaints', color: 'bg-emerald-500' },
+          ].map((item) => {
+            const last = insights.trends[insights.trends.length - 1][item.key];
+            const first = insights.trends[0][item.key];
+            const pct = first === 0 ? null : (((last - first) / first) * 100).toFixed(0);
+            return (
+              <div
+                key={item.label}
+                className="p-4 rounded-xl bg-gray-50 dark:bg-gray-800 flex items-start gap-3"
+              >
+                <span className={`w-3 h-3 rounded-full mt-1 shrink-0 ${item.color}`} />
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">{item.label}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Latest: {last} ·{' '}
+                    {pct === null ? 'N/A' : pct > 0 ? `+${pct}% vs start` : `${pct}% vs start`}
+                  </p>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -468,37 +590,56 @@ function RecommendationsSection({ insights }) {
       {insights.recommendations.map((r) => (
         <div
           key={r.issue}
-          className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 flex flex-col sm:flex-row sm:items-center gap-4"
+          className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm p-6"
         >
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-base font-bold text-gray-900 dark:text-white">{r.issue}</h3>
-              <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${PRIORITY_STYLES[r.priority]}`}>
-                {r.priority} priority
-              </span>
+          <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-base font-bold text-gray-900 dark:text-white">{r.issue}</h3>
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${PRIORITY_STYLES[r.priority]}`}>
+                  {r.priority} priority
+                </span>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3 mt-3">
+                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <Zap className="w-3 h-3" /> Action
+                  </p>
+                  <p className="text-sm text-gray-700 dark:text-gray-200">{r.action}</p>
+                </div>
+                {r.impact && (
+                  <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-100 dark:border-green-800">
+                    <p className="text-xs font-semibold text-green-600 dark:text-green-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                      <Target className="w-3 h-3" /> Impact
+                    </p>
+                    <p className="text-sm text-green-700 dark:text-green-300">{r.impact}</p>
+                  </div>
+                )}
+              </div>
             </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{r.action}</p>
-          </div>
-          <div className="shrink-0 text-center">
-            <div className="relative w-16 h-16 mx-auto">
-              <svg className="w-16 h-16 -rotate-90" viewBox="0 0 36 36">
-                <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e5e7eb" strokeWidth="3" />
-                <circle
-                  cx="18"
-                  cy="18"
-                  r="15.9"
-                  fill="none"
-                  stroke="#8b5cf6"
-                  strokeWidth="3"
-                  strokeDasharray={`${r.confidence} ${100 - r.confidence}`}
-                  strokeLinecap="round"
-                />
-              </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-gray-900 dark:text-white">
-                {r.confidence}%
-              </span>
+
+            <div className="shrink-0 text-center sm:pt-1">
+              <div className="relative w-16 h-16 mx-auto">
+                <svg className="w-16 h-16 -rotate-90" viewBox="0 0 36 36">
+                  <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e5e7eb" strokeWidth="3" />
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="15.9"
+                    fill="none"
+                    stroke="#8b5cf6"
+                    strokeWidth="3"
+                    strokeDasharray={`${r.confidence} ${100 - r.confidence}`}
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-gray-900 dark:text-white">
+                  {r.confidence}%
+                </span>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Confidence</p>
             </div>
-            <p className="text-xs text-gray-400 mt-1">Confidence</p>
           </div>
         </div>
       ))}
